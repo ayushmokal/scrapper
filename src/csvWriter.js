@@ -10,7 +10,8 @@ export async function saveToCsv(doctors, zipCode) {
     header: [
       { id: 'name', title: 'Name' },
       { id: 'address', title: 'Address' },
-      { id: 'phone', title: 'Phone Number' }
+      { id: 'phone', title: 'Phone Number' },
+      { id: 'profileUrl', title: 'Profile URL' }
     ]
   });
 
