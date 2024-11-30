@@ -15,53 +15,85 @@ class DoctorScraper:
         base_url = f"https://health.usnews.com/doctors/search?distance=250&location={zip_code}&np_pa=false&specialty=Urology&sort=distance"
         urls = []
         page = 1
+        max_retries = 3
         
         while True:
             current_url = f"{base_url}&page_num={page}" if page > 1 else base_url
             print(f"\nProcessing page {page}...")
             
-            try:
-                self.driver.get(current_url)
-                time.sleep(random.uniform(2, 4))  # Random delay between requests
-                
-                # Wait for doctor listings to load
-                WebDriverWait(self.driver, 15).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "h2.hvUhyf"))
-                )
-                
-                # Find all doctor profile links that contain doctor names
-                doctor_links = self.driver.find_elements(
-                    By.XPATH, 
-                    "//a[contains(@href, '/doctors/') and .//h2[contains(@class, 'hvUhyf')]]"
-                )
-                
-                if not doctor_links:
-                    break
+            retry_count = 0
+            success = False
+            
+            while retry_count < max_retries and not success:
+                try:
+                    # Add longer random delay between page loads
+                    time.sleep(random.uniform(4, 7))
+                    self.driver.get(current_url)
                     
-                for link in doctor_links:
+                    # Wait for initial page load
                     try:
-                        href = link.get_attribute('href')
-                        name = link.find_element(By.TAG_NAME, 'h2').text.strip()
-                        if href and '/doctors/' in href and 'search' not in href:
-                            urls.append((href, name))
-                    except:
+                        WebDriverWait(self.driver, 20).until(
+                            EC.presence_of_element_located((By.TAG_NAME, "body"))
+                        )
+                    except TimeoutException:
+                        print(f"Page load timeout for page {page}")
+                        retry_count += 1
                         continue
-                
-                # Check if there are more pages
-                next_button = self.driver.find_elements(
-                    By.XPATH, 
-                    "//button[contains(@aria-label, 'Next page')]"
-                )
-                if not next_button or 'disabled' in next_button[0].get_attribute('class'):
-                    break
                     
-                page += 1
-                time.sleep(random.uniform(1, 2))  # Random delay between pages
-                
-            except Exception as e:
-                print(f"Error on page {page}: {str(e)}")
-                time.sleep(5)  # Longer delay on error
-                continue
+                    # Wait for doctor listings with increased timeout
+                    try:
+                        WebDriverWait(self.driver, 20).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, "h2.hvUhyf"))
+                        )
+                    except TimeoutException:
+                        print(f"Doctor listings not found on page {page}")
+                        retry_count += 1
+                        continue
+                    
+                    # Find all doctor profile links that contain doctor names
+                    doctor_links = self.driver.find_elements(
+                        By.XPATH, 
+                        "//a[contains(@href, '/doctors/') and .//h2[contains(@class, 'hvUhyf')]]"
+                    )
+                    
+                    if not doctor_links:
+                        print(f"No doctor links found on page {page}")
+                        return urls
+                    
+                    for link in doctor_links:
+                        try:
+                            href = link.get_attribute('href')
+                            name = link.find_element(By.TAG_NAME, 'h2').text.strip()
+                            if href and '/doctors/' in href and 'search' not in href:
+                                urls.append((href, name))
+                        except Exception as e:
+                            print(f"Error extracting link details: {str(e)}")
+                            continue
+                    
+                    # Check if there are more pages
+                    try:
+                        next_button = self.driver.find_elements(
+                            By.XPATH, 
+                            "//button[contains(@aria-label, 'Next page')]"
+                        )
+                        if not next_button or 'disabled' in next_button[0].get_attribute('class'):
+                            print("Reached last page")
+                            return urls
+                    except Exception as e:
+                        print(f"Error checking next page button: {str(e)}")
+                        return urls
+                    
+                    success = True
+                    page += 1
+                    
+                except Exception as e:
+                    print(f"Error on page {page} (attempt {retry_count + 1}): {str(e)}")
+                    retry_count += 1
+                    time.sleep(random.uniform(5, 8))
+                    
+            if not success:
+                print(f"Failed to process page {page} after {max_retries} attempts")
+                return urls
                 
         return urls
 
@@ -73,35 +105,69 @@ class DoctorScraper:
         
         while retry_count < max_retries:
             try:
+                # Add longer random delays between requests
+                time.sleep(random.uniform(4, 7))
                 self.driver.get(url)
-                time.sleep(random.uniform(2, 3))  # Random delay between profile visits
                 
-                # Wait for the address container to load
-                WebDriverWait(self.driver, 15).until(
-                    EC.presence_of_element_located((By.CLASS_NAME, "fBaaRL"))
-                )
+                # Add an initial wait for any element to ensure page loads
+                try:
+                    WebDriverWait(self.driver, 20).until(
+                        EC.presence_of_element_located((By.TAG_NAME, "body"))
+                    )
+                except TimeoutException:
+                    print(f"Page load timeout for {url}")
+                    retry_count += 1
+                    continue
                 
-                # Get address
+                # Wait for the address container with increased timeout
+                try:
+                    WebDriverWait(self.driver, 20).until(
+                        EC.presence_of_element_located((By.CLASS_NAME, "fBaaRL"))
+                    )
+                except TimeoutException:
+                    print(f"Address container not found for {url}")
+                    retry_count += 1
+                    continue
+                
+                # Get address with multiple fallback strategies
                 address = "N/A"
-                try:
-                    address_element = self.driver.find_element(
-                        By.CLASS_NAME, "fBaaRL"
-                    )
-                    if address_element:
-                        address = address_element.text.strip()
-                except:
-                    pass
+                address_selectors = [
+                    "div.Box-w0dun1-0 p:not(.fOMSOj)",
+                    ".fBaaRL",
+                    "//div[contains(@class, 'Box-w0dun1-0')]//p[contains(text(), ',')]"
+                ]
                 
-                # Get phone
+                for selector in address_selectors:
+                    try:
+                        if selector.startswith("//"):
+                            address_element = self.driver.find_element(By.XPATH, selector)
+                        else:
+                            address_element = self.driver.find_element(By.CSS_SELECTOR, selector)
+                        if address_element and address_element.text.strip():
+                            address = address_element.text.strip()
+                            break
+                    except:
+                        continue
+                
+                # Get phone with increased reliability
                 phone = "N/A"
-                try:
-                    phone_element = self.driver.find_element(
-                        By.CSS_SELECTOR, "a[href^='tel:']"
-                    )
-                    if phone_element:
-                        phone = phone_element.text.strip()
-                except:
-                    pass
+                phone_selectors = [
+                    "a[href^='tel:']",
+                    "//a[starts-with(@href, 'tel:')]",
+                    ".//a[contains(@href, 'tel:')]"
+                ]
+                
+                for selector in phone_selectors:
+                    try:
+                        if selector.startswith("//") or selector.startswith(".//"):
+                            phone_element = self.driver.find_element(By.XPATH, selector)
+                        else:
+                            phone_element = self.driver.find_element(By.CSS_SELECTOR, selector)
+                        if phone_element and phone_element.text.strip():
+                            phone = phone_element.text.strip()
+                            break
+                    except:
+                        continue
                 
                 doctor_key = f"{name}-{address}"
                 if doctor_key not in self.unique_doctors:
@@ -117,7 +183,7 @@ class DoctorScraper:
             except (TimeoutException, WebDriverException) as e:
                 print(f"Attempt {retry_count + 1} failed for {url}: {str(e)}")
                 retry_count += 1
-                time.sleep(5)  # Longer delay between retries
+                time.sleep(random.uniform(5, 8))  # Increased delay between retries
                 
         print(f"Failed to extract details after {max_retries} attempts for {url}")
         return None
